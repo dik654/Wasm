@@ -1,0 +1,19 @@
+# library crate 만들기 
+# cargo new --lib contract
+# 다른 프로젝트에서 use contract로 import하여 사용가능
+[package]
+name = "contract"
+version = "0.1.0"
+edition = "2021"
+
+# cosmwasm binary 실행파일 생성시 필요한 라이브러리
+# C dynamic library
+# 현재 크레이트를 C 호환 동적 라이브러리로 컴파일
+[lib]
+crate-type = ["cdylib"]
+
+# cosmwasm용 컨트랙트 라이브러리
+# staking 기능을 가져오는 예제
+# https://github.com/CosmWasm/cosmwasm/tree/main/contracts
+[dependencies]
+cosmwasm-std = { version = "1.0.0-beta8", features = ["staking"] }
