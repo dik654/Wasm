@@ -1,0 +1,67 @@
+[package]
+name = "cw-erc20"
+description = "An implementation of the ERC20 token interface"
+version = "0.6.0"
+authors = ["Simon Warta <webmaster128@users.noreply.github.com>"]
+edition = "2018"
+license = "Apache-2.0"
+repository = "https://github.com/CosmWasm/cosmwasm-examples"
+
+
+exclude = [
+    # wasm 최적화 도구인 rust-optimizer 실행시 생기는 중간 파일들 제외시키기
+    # github 디렉터리에는 존재할 수 있지만 cargo publish로 crate.io에 배포시에 제외
+    "contract.wasm",
+    "hash.txt",
+]
+
+# C 호환 동적 라이브러리만 포함할 시 Cargo.toml의 [dependencies]에 사용이 불가
+# rlib을 사용함으로써 사용가능
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# cargo build --release 빌드시 설정
+[profile.release]
+# MAX 최적화, 컴파일 시간 매우 길어짐
+opt-level = 3
+# 디버깅 정보 포함x
+debug = false
+# 실행 파일이 필요로 하는 동적 라이브러리(.so 파일이나 .dll 파일 등)의 위치를 운영 체제에 알려주는 역할
+# 경로가 정확하지 않으면 런타임 오류, 취약점이 될 수 있음
+rpath = false
+# 컴파일 단계와 링크 단계 모두에서 최적화를 수행(링크단계는 c언어 .obj파일들 모아서 바이너리 파일 만드는 과정)
+lto = true
+# 디버그 모드의 단언문을 비활성화 
+# 추가 검사 없이 최대 성능 실행
+debug-assertions = false
+# 전체 코드를 하나의 compile 단위로 처리
+# 테스트 시에는 여러 개로 설정하여 병렬 compile로 빠르게 compile
+codegen-units = 1
+# 패닉 발생시 종료
+panic = 'abort'
+incremental = false
+# 오버플로우 체크
+overflow-checks = true
+
+# cargo test --features=backtraces 처럼
+# cmd에서 특정 feature를 지정하면 []에 포함된 crate의 기능이 활성화
+[features]
+backtraces = ["cosmwasm-std/backtraces"]
+
+[dependencies]
+# cosmwasm 기본 기능 및 타입
+cosmwasm-std = "1.0.0-beta"
+# cosmwasm 데이터를 저장 조회
+cosmwasm-storage = "1.0.0-beta"
+# rust schema -> JSON
+schemars = "0.8.1"
+# rust용 직렬화/역직렬화
+serde = { version = "1.0.125", default-features = false, features = ["derive"] }
+# hex값 처리
+hex = "0.4"
+
+[dev-dependencies]
+# cosmwasm 컨트랙트 테스트용 가상환경
+cosmwasm-vm = "1.0.0-beta"
+# cosmwasm 컨트랙트 입출력 스키마 자동생성
+cosmwasm-schema = "1.0.0-beta"
