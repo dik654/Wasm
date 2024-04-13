@@ -6,6 +6,8 @@ use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 use std::convert::TryInto;
 
 use crate::error::ContractError;
+// message에도 type이 존재
+// query용 response도 따로 존재
 use crate::msg::{AllowanceResponse, BalanceResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::Constants;
 
@@ -16,21 +18,29 @@ pub const PREFIX_ALLOWANCES: &[u8] = b"allowances";
 pub const KEY_CONSTANTS: &[u8] = b"constants";
 pub const KEY_TOTAL_SUPPLY: &[u8] = b"total_supply";
 
-#[entry_point]
 // solidity의 constructor와 같은 역할
+#[entry_point]
 pub fn instantiate(
+    // deps에 KVStore storage 접근 주소 및 address 검증 로직이 존재 
     deps: DepsMut,
+    // env는 블록 정보, 컨트랙트 주소 등 실제 사용되지않더라도 환경에 대한 컨텍스트 제공을 위해 인수로 전달 
     _env: Env,
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
+    // 전역 변수 선언
     let mut total_supply: u128 = 0;
     {
         // Initial balances
+        // balance KVStore 생성
         let mut balances_store = PrefixedStorage::new(deps.storage, PREFIX_BALANCES);
+        // 유저의 주소와 초기 balance 배열 읽기
         for row in msg.initial_balances {
+            // 초기 balance를 uint128로 변환하여 
             let amount_raw = row.amount.u128();
+            // 유저의 주소(Key) = balance(Value)로 저장
             balances_store.set(row.address.as_str().as_bytes(), &amount_raw.to_be_bytes());
+            // totalSupply에 값 추가
             total_supply += amount_raw;
         }
     }
@@ -46,25 +56,35 @@ pub fn instantiate(
         return Err(ContractError::DecimalsExceeded {});
     }
 
+    // config
+    // name, symbol, decimals, total supply를 저장할 config KVStore 생성 
     let mut config_store = PrefixedStorage::new(deps.storage, PREFIX_CONFIG);
+    // name, symbol, decimals를 저장한 인스턴스를 직렬화
     let constants = to_vec(&Constants {
         name: msg.name,
         symbol: msg.symbol,
         decimals: msg.decimals,
     })?;
+    // 직렬화한 name, symbol, decimals 값을 저장
     config_store.set(KEY_CONSTANTS, &constants);
+    // total supply 저장
     config_store.set(KEY_TOTAL_SUPPLY, &total_supply.to_be_bytes());
 
+    // 리턴값 없이 종료
     Ok(Response::default())
 }
 
+// 상태 변경이 일어나는 함수들
 #[entry_point]
 pub fn execute(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
+    // block -> transaction -> message -> cosmwasm module -> handler(match문) -> keeper(KVStore)
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
+    // msg에 어떤 함수가 들어오냐에 따라 다르게 동작(switch문)
+    // handler
     match msg {
         ExecuteMsg::Approve { spender, amount } => try_approve(deps, env, info, spender, &amount),
         ExecuteMsg::Transfer { recipient, amount } => {
@@ -79,6 +99,7 @@ pub fn execute(
     }
 }
 
+// view 함수들
 #[entry_point]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> Result<Binary, ContractError> {
     match msg {
@@ -102,6 +123,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> Result<Binary, ContractErr
     }
 }
 
+// execute entry point에서 사용될 함수
 fn try_transfer(
     deps: DepsMut,
     _env: Env,
@@ -121,6 +143,7 @@ fn try_transfer(
         .add_attribute("recipient", recipient))
 }
 
+// execute entry point에서 사용될 함수
 fn try_transfer_from(
     deps: DepsMut,
     _env: Env,
@@ -129,10 +152,13 @@ fn try_transfer_from(
     recipient: String,
     amount: &Uint128,
 ) -> Result<Response, ContractError> {
+    // deps로 해당 address가 올바른지 체크
     let owner_address = deps.api.addr_validate(owner.as_str())?;
     let recipient_address = deps.api.addr_validate(recipient.as_str())?;
     let amount_raw = amount.u128();
 
+    // dep에 storage 관련 정보가 들어가있음
+    // info에 전송관련 정보가 들어가있음
     let mut allowance = read_allowance(deps.storage, &owner_address, &info.sender)?;
     if allowance < amount_raw {
         return Err(ContractError::InsufficientAllowance {
@@ -151,6 +177,7 @@ fn try_transfer_from(
         .add_attribute("recipient", recipient))
 }
 
+// execute entry point에서 사용될 함수
 fn try_approve(
     deps: DepsMut,
     _env: Env,
@@ -166,11 +193,7 @@ fn try_approve(
         .add_attribute("spender", spender))
 }
 
-/// Burn tokens
-///
-/// Remove `amount` tokens from the system irreversibly, from signer account
-///
-/// @param amount the amount of money to burn
+// execute entry point에서 사용될 함수
 fn try_burn(
     deps: DepsMut,
     _env: Env,
@@ -211,6 +234,7 @@ fn try_burn(
         .add_attribute("amount", amount.to_string()))
 }
 
+// 아래는 위의 함수들의 보조 함수들
 fn perform_transfer(
     store: &mut dyn Storage,
     from: &Addr,
@@ -218,26 +242,33 @@ fn perform_transfer(
     amount: u128,
 ) -> Result<(), ContractError> {
     let mut balances_store = PrefixedStorage::new(store, PREFIX_BALANCES);
-
+    
+    // KVStore에서 user의 balance 가져와서 u128로 변환
     let mut from_balance = match balances_store.get(from.as_str().as_bytes()) {
         Some(data) => bytes_to_u128(&data),
         None => Ok(0u128),
     }?;
 
+    // balance가 보내려는 amount보다 작으면 Err
     if from_balance < amount {
         return Err(ContractError::InsufficientFunds {
             balance: from_balance,
             required: amount,
         });
     }
+    // 전송시 balance 보낸만큼 balance 감소
     from_balance -= amount;
+    // KVStore에 감소된 balance 적용
     balances_store.set(from.as_str().as_bytes(), &from_balance.to_be_bytes());
 
+    // 받을 사람의 balance 가져와서
     let mut to_balance = match balances_store.get(to.as_str().as_bytes()) {
         Some(data) => bytes_to_u128(&data),
         None => Ok(0u128),
     }?;
+    // 받을 만큼 balance 추가
     to_balance += amount;
+    // KVStore에 적용
     balances_store.set(to.as_str().as_bytes(), &to_balance.to_be_bytes());
 
     Ok(())
@@ -246,6 +277,9 @@ fn perform_transfer(
 // Converts 16 bytes value into u128
 // Errors if data found that is not 16 bytes
 pub fn bytes_to_u128(data: &[u8]) -> Result<u128, ContractError> {
+    // 타입 변환이 불분명할 때
+    // try_into는 from_be_bytes에서 타입을 유추하여(u128)
+    // 해당 타입으로 변환할 수 있으면 Ok 반환 아니면 Err
     match data[0..16].try_into() {
         Ok(bytes) => Ok(u128::from_be_bytes(bytes)),
         Err(_) => Err(ContractError::CorruptedDataFound {}),
@@ -255,14 +289,19 @@ pub fn bytes_to_u128(data: &[u8]) -> Result<u128, ContractError> {
 // Reads 16 byte storage value into u128
 // Returns zero if key does not exist. Errors if data found that is not 16 bytes
 pub fn read_u128(store: &ReadonlyPrefixedStorage, key: &Addr) -> Result<u128, ContractError> {
+    // KVStore key로 value 얻어내기
+    // key는 Address -> string -> bytes로 변환해서 사용
     let result = store.get(key.as_str().as_bytes());
     match result {
+        // data는 result 값
+        // result를 u128로 변환하여 리턴
         Some(data) => bytes_to_u128(&data),
         None => Ok(0u128),
     }
 }
 
 fn read_balance(store: &dyn Storage, owner: &Addr) -> Result<u128, ContractError> {
+    // KVStore에서 user의 주소를 key로 balance 가져오기
     let balance_store = ReadonlyPrefixedStorage::new(store, PREFIX_BALANCES);
     read_u128(&balance_store, owner)
 }
@@ -272,11 +311,14 @@ fn read_allowance(
     owner: &Addr,
     spender: &Addr,
 ) -> Result<u128, ContractError> {
+    // 이중 mapping인 경우 multilevel로 접근
     let owner_store =
         ReadonlyPrefixedStorage::multilevel(store, &[PREFIX_ALLOWANCES, owner.as_str().as_bytes()]);
     read_u128(&owner_store, spender)
 }
 
+// Clippy lint 경고 비활성화
+// Option(Ok와 Err), Result가 필요없어보일 경우 경고 하는 것을 방지
 #[allow(clippy::unnecessary_wraps)]
 fn write_allowance(
     store: &mut dyn Storage,
@@ -284,14 +326,17 @@ fn write_allowance(
     spender: &Addr,
     amount: u128,
 ) -> StdResult<()> {
+    // keeper에 접근
     let mut owner_store =
         PrefixedStorage::multilevel(store, &[PREFIX_ALLOWANCES, owner.as_str().as_bytes()]);
+    // KVStore에 쓰기
     owner_store.set(spender.as_str().as_bytes(), &amount.to_be_bytes());
     Ok(())
 }
 
 fn is_valid_name(name: &str) -> bool {
     let bytes = name.as_bytes();
+    // 길이 검사
     if bytes.len() < 3 || bytes.len() > 30 {
         return false;
     }
@@ -300,10 +345,12 @@ fn is_valid_name(name: &str) -> bool {
 
 fn is_valid_symbol(symbol: &str) -> bool {
     let bytes = symbol.as_bytes();
+    // 길이 검사
     if bytes.len() < 3 || bytes.len() > 6 {
         return false;
     }
     for byte in bytes.iter() {
+        // 각 bytes가 ASCII 코드 A - Z에 해당하는지 체크
         if *byte < 65 || *byte > 90 {
             return false;
         }
@@ -312,6 +359,7 @@ fn is_valid_symbol(symbol: &str) -> bool {
 }
 
 #[cfg(test)]
+// 테스트용 모듈 선언
 mod tests {
     use super::*;
     use crate::msg::InitialBalance;
@@ -319,14 +367,19 @@ mod tests {
     use cosmwasm_std::{from_slice, Addr, Env, MessageInfo, Storage, Timestamp, Uint128};
     use cosmwasm_storage::ReadonlyPrefixedStorage;
 
+    // 테스트 환경 설정
     fn mock_env_height(signer: &str, height: u64, time: u64) -> (Env, MessageInfo) {
+        // mock env
         let mut env = mock_env();
+        // mock approve 대상 signer
         let info = mock_info(signer, &[]);
+        // 블록 정보
         env.block.height = height;
         env.block.time = Timestamp::from_seconds(time);
         (env, info)
     }
 
+    // test용 view 함수들 선언
     fn get_constants(storage: &dyn Storage) -> Constants {
         let config_storage = ReadonlyPrefixedStorage::new(storage, PREFIX_CONFIG);
         let data = config_storage
@@ -356,6 +409,7 @@ mod tests {
         return read_u128(&owner_storage, spender).unwrap();
     }
 
+    // constructor 테스트 모듈
     mod instantiate {
         use super::*;
         use crate::error::ContractError;
@@ -363,6 +417,7 @@ mod tests {
         #[test]
         fn works() {
             let mut deps = mock_dependencies(&[]);
+            // constructor용 message 생성
             let instantiate_msg = InstantiateMsg {
                 name: "Cash Token".to_string(),
                 symbol: "CASH".to_string(),
@@ -374,8 +429,11 @@ mod tests {
                 .to_vec(),
             };
             let (env, info) = mock_env_height("creator", 450, 550);
+            // 컨트랙트 생성
             let res = instantiate(deps.as_mut(), env, info, instantiate_msg).unwrap();
+            // 성공 여부 확인
             assert_eq!(0, res.messages.len());
+            // storage에 접근해서 
             assert_eq!(
                 get_constants(&deps.storage),
                 Constants {
@@ -384,6 +442,7 @@ mod tests {
                     decimals: 9
                 }
             );
+            // 초기유저 및 total balance가 constructor 설정값과 동일한지 체크
             assert_eq!(
                 get_balance(&deps.storage, &Addr::unchecked("addr0000".to_string())),
                 11223344
